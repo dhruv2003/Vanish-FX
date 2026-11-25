@@ -26,25 +26,46 @@ async function syntheticStream() {
   return c.captureStream(30);
 }
 
-$('#start').onclick = async () => {
+const msg = (t, err) => { const m = $('#msg'); m.textContent = t; m.style.color = err ? '#f87171' : '#9a94b3'; };
+
+async function start() {
   $('#start').disabled = true;
-  const ok = await link.connect();
-  if (!ok) { $('#start').textContent = 'Engine failed to start'; return; }
-  let raw;
-  if (params.has('synthetic')) {
-    raw = await syntheticStream();
-    link.send({ type: 'fake-seg', on: true });
-  } else {
-    raw = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: { echoCancellation: true, noiseSuppression: false } });
+  $('#start').textContent = 'Starting…';
+  try {
+    msg('Connecting to the effects engine…');
+    const ok = await link.connect();
+    if (!ok) throw new Error('The effects engine did not start. Try reloading this page.');
+    let raw;
+    if (params.has('synthetic')) {
+      raw = await syntheticStream();
+      link.send({ type: 'fake-seg', on: true });
+    } else {
+      msg('Asking for camera + mic… (click Allow in the bar near the address bar)');
+      try {
+        raw = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: { echoCancellation: true, noiseSuppression: false } });
+      } catch (e) {
+        if (e.name === 'NotAllowedError') throw new Error('Camera/mic access was blocked. Click the camera icon in the address bar → Allow, then reload this page.');
+        if (e.name === 'NotReadableError') throw new Error('Your camera is busy. Close other apps or tabs using it (Zoom, Meet, Photo Booth…) and reload.');
+        if (e.name === 'NotFoundError') throw new Error('No camera found.');
+        throw e;
+      }
+    }
+    link.send({ type: 'debug', on: $('#debug').checked });
+    const out = wrapStream(raw, link);
+    // show video only (avoid hearing yourself); sound FX still play locally
+    $('#out').srcObject = new MediaStream(out.getVideoTracks());
+    $('#start').textContent = '● Live';
+    msg('Live. The AI takes a few seconds to load the first time (watch "models" in the overlay).');
+    window.__vfxOut = out;
+  } catch (e) {
+    console.error('[Vanish FX]', e);
+    msg(e.message || String(e), true);
+    $('#start').disabled = false;
+    $('#start').textContent = '▶ Retry camera';
   }
-  link.send({ type: 'debug', on: $('#debug').checked });
-  const out = wrapStream(raw, link);
-  // show video only (avoid hearing yourself); sound FX still play locally
-  $('#out').srcObject = new MediaStream(out.getVideoTracks());
-  $('#start').textContent = '● Live';
-  window.__vfxOut = out;
-};
+}
+$('#start').onclick = start;
 document.querySelectorAll('[data-fx]').forEach((b) => (b.onclick = () => link.send({ type: 'cmd', cmd: { type: 'trigger', effect: b.dataset.fx, force: true } })));
 $('#bg').onclick = () => link.send({ type: 'cmd', cmd: { type: 'captureBg', delayMs: 3000 } });
 $('#debug').onchange = () => link.send({ type: 'debug', on: $('#debug').checked });
-if (params.has('autostart')) $('#start').click();
+start();
