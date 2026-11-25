@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Vanish FX",
+  "version": "1.0.0",
+  "description": "Gesture-triggered camera effects for browser video calls: dust snap, sealing scroll, clone burst and energy orb. Runs 100% locally.",
+  "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "action": { "default_popup": "popup/popup.html", "default_icon": { "16": "icons/icon16.png", "48": "icons/icon48.png" } },
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*", "https://teams.microsoft.com/*", "https://teams.live.com/*", "https://*.zoom.us/*", "https://*.zoom.com/*", "http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["hook.js"], "world": "MAIN", "run_at": "document_start", "all_frames": true, "match_about_blank": true
+    },
+    {
+      "matches": ["https://meet.google.com/*", "https://teams.microsoft.com/*", "https://teams.live.com/*", "https://*.zoom.us/*", "https://*.zoom.com/*", "http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["bridge.js"], "run_at": "document_start", "all_frames": true, "match_about_blank": true
+    }
+  ],
+  "web_accessible_resources": [
+    { "resources": ["engine.html", "engine.js"], "matches": ["<all_urls>"] }
+  ],
+  "commands": {
+    "fx-snap":   { "suggested_key": { "default": "Alt+Shift+1" }, "description": "Dust Snap (vanish / reappear)" },
+    "fx-scroll": { "suggested_key": { "default": "Alt+Shift+2" }, "description": "Sealing Scroll (seal / release)" },
+    "fx-clones": { "suggested_key": { "default": "Alt+Shift+3" }, "description": "Clone Burst (on / off)" },
+    "fx-orb":    { "suggested_key": { "default": "Alt+Shift+4" }, "description": "Energy Orb (on / off)" }
+  },
+  "content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'" }
+}

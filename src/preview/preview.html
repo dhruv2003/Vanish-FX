@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Vanish FX · Test mirror</title>
+<style>
+  body { margin:0; background:#0b0912; color:#ece9f6; font:14px/1.4 system-ui,-apple-system,sans-serif; display:flex; flex-direction:column; align-items:center; gap:14px; padding:22px; }
+  h1 { margin:0; font-size:20px; } p { margin:0; color:#9a94b3; text-align:center; max-width:760px; }
+  video { width:min(960px,94vw); aspect-ratio:16/9; background:#000; border-radius:14px; border:1px solid #2c2840; }
+  .bar { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+  button { font:inherit; color:#fff; background:#8b5cf6; border:0; border-radius:9px; padding:8px 14px; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid #2c2840; }
+  label { display:flex; gap:6px; align-items:center; color:#c9c4dc; }
+  iframe { display:none; }
+</style></head>
+<body>
+  <h1>🪞 Vanish FX · Test mirror</h1>
+  <p>This preview is <b>not mirrored</b>: it shows exactly what people on a call see. Try the gestures, or use the buttons. The overlay shows what the hand tracker sees and only appears here, never on calls.</p>
+  <video id="out" autoplay playsinline muted></video>
+  <div class="bar">
+    <button id="start">▶ Start camera + mic</button>
+    <button data-fx="snap">🫰 Snap</button>
+    <button data-fx="scroll">📜 Seal</button>
+    <button data-fx="clones">👥 Clones</button>
+    <button data-fx="orb">🔵 Orb</button>
+    <button id="bg" class="ghost">📷 Capture empty room (3s)</button>
+    <label><input type="checkbox" id="debug" checked> tracking overlay</label>
+  </div>
+  <iframe id="engine" src="../engine.html" data-vanishfx></iframe>
+  <script type="module" src="preview.js"></script>
+</body>
+</html>

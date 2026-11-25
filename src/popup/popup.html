@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <header>
+    <div class="brand"><img src="../icons/icon48.png" alt=""><div><h1>Vanish FX</h1><p id="status">Checking this tab…</p></div></div>
+    <label class="switch big" title="Turn Vanish FX on/off"><input type="checkbox" id="enabled"><span></span></label>
+  </header>
+
+  <section class="effects" id="effects"></section>
+
+  <section class="card">
+    <button id="captureBg" class="wide">📷 Capture empty room</button>
+    <p class="hint" id="bgHint">Step out of frame when the countdown ends. Makes the vanish look perfect.</p>
+  </section>
+
+  <details class="card" open>
+    <summary>Settings</summary>
+    <div class="row"><label for="sensitivity">Gesture sensitivity</label><input type="range" id="sensitivity" min="0" max="1" step="0.05"></div>
+    <div class="row"><label for="soundConfirm">Confirm snap with the click sound</label><label class="switch"><input type="checkbox" id="soundConfirm"><span></span></label></div>
+    <div class="row"><label for="dustDuration">Dust duration <b id="dustDurationVal"></b></label><input type="range" id="dustDuration" min="1.5" max="5" step="0.1"></div>
+    <div class="row"><label for="dustDirection">Dust blows</label>
+      <select id="dustDirection"><option value="right">→ right</option><option value="left">← left</option><option value="up">↑ up</option><option value="down">↓ down</option></select></div>
+    <div class="row"><label for="cloneCount">Clones</label>
+      <select id="cloneCount"><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></div>
+    <div class="row"><label for="muteWhileGone">Mute mic while vanished / sealed</label><label class="switch"><input type="checkbox" id="muteWhileGone"><span></span></label></div>
+    <div class="row"><label for="sfxVolume">Sound FX volume</label><input type="range" id="sfxVolume" min="0" max="1" step="0.05"></div>
+    <div class="row"><label for="sfxToCall">Others hear sound FX</label><label class="switch"><input type="checkbox" id="sfxToCall"><span></span></label></div>
+    <div class="row"><label for="sfxLocal">I hear sound FX</label><label class="switch"><input type="checkbox" id="sfxLocal"><span></span></label></div>
+  </details>
+
+  <footer>
+    <button id="openMirror" class="ghost">🪞 Open test mirror</button>
+    <button id="shortcuts" class="ghost">⌨️ Shortcuts</button>
+  </footer>
+  <p class="tiny">Everything runs on your computer. No video or audio leaves your browser, except the call itself.</p>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

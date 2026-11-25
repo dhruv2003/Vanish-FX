@@ -1,0 +1,17 @@
+{
+  "name": "vanish-fx",
+  "version": "1.0.0",
+  "description": "Gesture-triggered camera effects for browser video calls",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --dev --no-zip"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@mediapipe/tasks-vision": "^1.2.3",
+    "esbuild": "^0.28.2"
+  }
+}
