@@ -14,6 +14,27 @@ function openPalm(h) {
   return fingersUp(h) === 4 && thumbOut && spread;
 }
 function fist(h) { return fingersUp(h) <= 1; }
+const D3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
+// Hand-scale-normalised snap features (2D projection + 3D world landmarks when
+// available, so a tilted / side-on hand still reads correctly).
+function snapFeatures(h) {
+  const p = h.pts;
+  const s2 = Math.max(D(p[0], p[9]), D(p[5], p[17]) * 1.2, 1e-3);
+  const pinch2 = Math.min(D(p[4], p[12]), D(p[4], p[11])) / s2;
+  const thenar = (q, f) => ({ x: (q[1].x + q[2].x + q[0].x) / 3, y: (q[1].y + q[2].y + q[0].y) / 3, z: f ? ((q[1].z || 0) + (q[2].z || 0) + (q[0].z || 0)) / 3 : 0 });
+  const palm = (q) => { let x = 0, y = 0, z = 0; for (const i of [0, 5, 9, 13, 17]) { x += q[i].x; y += q[i].y; z += q[i].z || 0; } return { x: x / 5, y: y / 5, z: z / 5 }; };
+  let pinch = pinch2 * 1.1, slam;
+  const w = h.world;
+  if (w && w.length >= 21) {
+    const s3 = Math.max(D3(w[0], w[9]), D3(w[5], w[17]) * 1.25, 0.04);
+    pinch = Math.min(pinch, Math.min(D3(w[4], w[12]), D3(w[4], w[11]) * 1.05) / s3);
+    slam = Math.min(D3(w[12], thenar(w, true)), D3(w[12], palm(w))) / s3;
+  } else {
+    slam = Math.min(D(p[12], thenar(p, false)), D(p[12], palm(p))) / s2;
+  }
+  return { pinch, slam };
+}
+
 export function palmCenter(h) {
   const ids = [0, 5, 9, 13, 17];
   let x = 0, y = 0;
@@ -49,28 +70,46 @@ export class Gestures {
     const fire = (e) => { if (!cooldown) { events.push(e); this.lastFire = now; } };
 
     // ---------------------------------------------------------- finger snap
-    const contactThr = 0.2 + 0.25 * sens;
+    // Sensitivity-scaled, angle-tolerant snap kinematics adapted from
+    // thanos-snap-video-extension (gesture.js `handFeatures` / `setSensitivity`),
+    // MIT © 2026 Aayush Bhatta. Fused with our mic click detector below.
+    const k = sens;
+    const pinchMax = 0.44 + 0.16 * k;        // thumb–middle "armed" contact
+    const separationMin = 0.50 - 0.10 * k;   // thumb and middle pull apart
+    const slamMax = 0.52 + 0.16 * k;         // middle finger lands in the palm
+    const dropMin = 0.18 - 0.08 * k;         // ...dropping that far
+    const armedWindowMs = 650 + 350 * k;     // how long an armed pinch stays live
     const seen = new Set();
     for (const h of hands) {
       seen.add(h.key);
-      const st = (this.snapState[h.key] ||= { contact: false, lastEnd: -1e9, motionAt: -1e9, used: -1e9 });
-      const d = D(h.pts[4], h.pts[12]) / h.size;
-      const isContact = d < contactThr && D(h.pts[4], h.pts[8]) / h.size > contactThr * 0.8;
+      const st = (this.snapState[h.key] ||= { contact: false, lastEnd: -1e9, motionAt: -1e9, used: -1e9, armedAt: -1e9, armPinch: 9, peakSlam: 0, hist: [] });
+      const f = snapFeatures(h);
+      const isContact = f.pinch < pinchMax && !openPalm(h);
       if (isContact) {
         if (!st.contact) st.start = now;
         st.contact = true;
-        st.pos = { ...h.pts[12] };
-        st.wristD = D(h.pts[12], h.pts[0]) / h.size;
+        st.armedAt = now;
+        st.armPinch = f.pinch;
+        st.peakSlam = Math.max(st.peakSlam, f.slam);
       } else if (st.contact) {
         st.contact = false;
         st.lastEnd = now;
       }
-      // motion signature right after release: middle finger flicks down into the palm
-      if (!st.contact && now - st.lastEnd < 220 && st.pos) {
-        const moved = D(h.pts[12], st.pos) / h.size;
-        const curled = D(h.pts[12], h.pts[0]) / h.size < st.wristD * 0.9;
-        if (moved > 0.38 - 0.18 * sens && curled) st.motionAt = now;
+      st.hist.push(now, f.slam);
+      while (st.hist.length && now - st.hist[0] > 450) st.hist.splice(0, 2);
+      let maxSlam = st.peakSlam;
+      for (let i = 1; i < st.hist.length; i += 2) if (st.hist[i] > maxSlam) maxSlam = st.hist[i];
+      const armed = now - st.armedAt <= armedWindowMs;
+      if (armed && !isContact) {
+        const separated = f.pinch >= separationMin || f.pinch - st.armPinch >= 0.18;
+        const landed = f.slam < slamMax;
+        const slammed = maxSlam - f.slam >= dropMin;
+        if ((separated && landed) || (separated && slammed) || (landed && slammed)) {
+          st.motionAt = now;
+          st.armedAt = -1e9; st.peakSlam = 0; st.hist.length = 0;
+        }
       }
+      this.debug.pinch = f.pinch;
     }
     // hand vanished mid-contact (motion blur during the snap) counts as a release
     for (const [k, st] of Object.entries(this.snapState)) {
@@ -82,7 +121,7 @@ export class Gestures {
         if (now - st.used < 1200) continue;
         let ok = false;
         if (useSound) {
-          const recent = st.contact || now - st.lastEnd < 450;
+          const recent = st.contact || now - st.lastEnd < 450 || now - st.motionAt < 300;
           const c = this.clicks.find((c) => Math.abs(c - (st.contact ? now : st.lastEnd)) < 380);
           ok = recent && c != null && (st.contact ? now - st.start < 3000 : true);
           if (ok) this.clicks = this.clicks.filter((x) => x !== c);

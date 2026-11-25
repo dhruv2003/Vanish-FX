@@ -108,6 +108,7 @@ function clack(ctx, out, when) {
 
 function bell(ctx, out, when, f, gain = 0.25, dur = 1.8) {
   for (const [ratio, amp] of [[1, 1], [2.76, 0.45], [5.4, 0.25], [8.93, 0.12]]) {
+    if (f * ratio > ctx.sampleRate * 0.45) continue;
     tone(ctx, out, when, { f0: f * ratio, dur: dur / Math.sqrt(ratio), gain: gain * amp, attack: 0.003 });
   }
 }
@@ -143,6 +144,35 @@ const SFX = {
     poofAt(ctx, out, t, 1.4);
     whoosh(ctx, out, t, 0.6, { from: 300, to: 3000, gain: 0.35, attack: 0.05 });
     bell(ctx, out, t + 0.05, 880, 0.12, 1.2);
+  },
+  // anticipation: a short electric crackle / shiver
+  shiver(ctx, out, t) {
+    crackles(ctx, out, t, 0.18, 26, { rising: true, gain: 0.2 });
+    tone(ctx, out, t, { type: 'sawtooth', f0: 90, f1: 140, dur: 0.18, gain: 0.05, attack: 0.04 });
+  },
+  // big beat: sub drop + body thump + a short noisy crack
+  impact(ctx, out, t) {
+    tone(ctx, out, t, { f0: 95, f1: 32, dur: 0.6, gain: 0.7, attack: 0.004 });
+    tone(ctx, out, t, { type: 'triangle', f0: 180, f1: 60, dur: 0.18, gain: 0.35, attack: 0.002 });
+    const s = noiseSrc(ctx, t, 0.25);
+    const lp = filt(ctx, 'lowpass', 1800, 0.7);
+    lp.frequency.setValueAtTime(3200, t);
+    lp.frequency.exponentialRampToValueAtTime(200, t + 0.25);
+    s.connect(lp).connect(env(ctx, t, [[0.003, 0.7], [0.05, 0.25], [0.25, 0.0001]])).connect(out);
+  },
+  // shockwave: a fast swept whoosh that rushes past
+  shockwave(ctx, out, t, { soft = 0 } = {}) {
+    const g = soft ? 0.25 : 0.45;
+    whoosh(ctx, out, t, 0.55, { from: 600, to: 4200, q: 1.1, gain: g, attack: 0.03 });
+    whoosh(ctx, out, t + 0.12, 0.6, { from: 3800, to: 300, q: 0.8, gain: g * 0.6, attack: 0.08 });
+  },
+  // sparkle: a scatter of tiny bell pings
+  sparkle(ctx, out, t, { soft = 0 } = {}) {
+    const n = soft ? 4 : 8;
+    for (let i = 0; i < n; i++) {
+      const f = 1400 + Math.random() * 1800;
+      bell(ctx, out, t + i * (0.025 + Math.random() * 0.03), f, (soft ? 0.03 : 0.05) * (1 - i / (n + 2)), 0.5);
+    }
   },
   orbStop(ctx, out, t) {
     tone(ctx, out, t, { f0: 1400, f1: 180, dur: 0.4, gain: 0.18 });
