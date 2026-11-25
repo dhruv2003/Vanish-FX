@@ -58,7 +58,7 @@ async function poll() {
   else if (s.error) { el.textContent = 'AI failed to load: ' + s.error; el.className = 'warn'; }
   else if (!s.modelsReady) { el.textContent = 'Camera active · loading AI…'; }
   else {
-    el.textContent = `Live · ${s.fps} fps · room learned ${s.bgCoverage}%` + (s.micPresent ? '' : ' · no mic');
+    el.textContent = `Live · ${s.fps} fps · room ${s.roomLocked ? 'locked ✓' : `learned ${s.bgCoverage}%`}` + (s.micPresent ? '' : ' · no mic');
     el.className = 'ok';
   }
   for (const fx of EFFECTS) {
@@ -69,9 +69,11 @@ async function poll() {
     b.textContent = (state && ACTION[fx.id][state]) || 'Try';
   }
   $('captureBg').disabled = !s;
-  if (s?.capturing != null) {
-    $('captureBg').textContent = s.capturing > 0 ? `Leave the frame… ${s.capturing}` : 'Capturing… stay out!';
-  } else $('captureBg').textContent = '📷 Capture empty room';
+  const cap = s?.capture;
+  if (cap?.phase === 'countdown') $('captureBg').textContent = `Leave the frame… ${cap.secs}`;
+  else if (cap?.phase === 'capturing') $('captureBg').textContent = 'Capturing… stay out!';
+  else if (cap?.phase === 'done') $('captureBg').textContent = cap.locked ? `Room captured ✓ (${cap.pct}%)` : `Only ${cap.pct}% seen · try again`;
+  else $('captureBg').textContent = s?.roomLocked ? '📷 Re-capture empty room' : '📷 Capture empty room';
 }
 
 (async () => {

@@ -5,6 +5,7 @@ import { loadSettings, mergeSettings } from '../shared/settings.js';
 import { Vision, Masks, Plate, canvas, ctx2d } from './vision.js';
 import { Gestures } from './gestures.js';
 import { Smoke, DustSnap, SealScroll, CloneBurst, EnergyOrb } from './effects.js';
+import { MotionFX } from './motion.js';
 
 const hasExt = !!globalThis.chrome?.runtime?.id;
 const BASE = hasExt ? chrome.runtime.getURL('') : new URL('./', location.href).href;
@@ -14,7 +15,7 @@ const st = {
   W: 0, H: 0,
   lastFrameAt: 0, lastNow: 0,
   micPresent: false, micMuted: false,
-  debug: false, fakeSeg: false,
+  debug: false, fakeSeg: false, noAI: false,
   fps: 0, frames: 0, fpsT: 0,
   tabId: null,
   hands: [],
@@ -29,9 +30,11 @@ const dust = new DustSnap();
 const scroll = new SealScroll();
 const clones = new CloneBurst();
 const orb = new EnergyOrb();
+const mfx = new MotionFX();
+const perf = { ai: 0, fx: 0, total: 0 };
 
 // test hook (only reachable from the same origin, i.e. the extension's own pages)
-globalThis.__vfxDebug = { dust, scroll, clones, orb, gestures, log: [] };
+globalThis.__vfxDebug = { vision, dust, scroll, clones, orb, gestures, plate, masks, mfx, perf, fps: () => st.fps, status: () => status(), log: [] };
 
 let frameC, frameX, outC, outX, personC, personX, hiddenC, hiddenX;
 
@@ -51,6 +54,7 @@ window.addEventListener('message', (e) => {
     case 'mic-present': st.micPresent = !!d.present; break;
     case 'debug': st.debug = !!d.on; break;
     case 'fake-seg': st.fakeSeg = !!d.on; break;
+    case 'no-ai': st.noAI = !!d.on; break; // test feed only: skip MediaPipe
     case 'cmd': handleCmd(d.cmd); break;
   }
 });
@@ -89,7 +93,9 @@ function status() {
     active: isActive(),
     modelsReady: vision.ready, loading: vision.loading, error: vision.error,
     bgCoverage: Math.round(plate.coverage * 100),
-    capturing: plate.capturePending?.(now) ? Math.max(0, Math.ceil(((plate.captureStart || 0) - now) / 1000)) : null,
+    roomLocked: !!plate.locked,
+    capture: plate.captureInfo ? plate.captureInfo(now) : null,
+    capturing: plate.capturePending(now) ? Math.max(0, Math.ceil(((plate.captureStart || 0) - now) / 1000)) : null,
     micPresent: st.micPresent, micMuted: st.micMuted,
     fps: st.fps, hands: st.hands.length,
     states: { snap: dust.state, scroll: scroll.state, clones: clones.state, orb: orb.state },
@@ -100,7 +106,7 @@ function status() {
 const pendingCmds = [];
 function handleCmd(cmd, manual) {
   if (!cmd) return;
-  if (cmd.type === 'captureBg') { plate.capture(performance.now(), cmd.delayMs ?? 3000); return; }
+  if (cmd.type === 'captureBg') { plate.captureRoom(performance.now()); return; }
   if (cmd.type === 'trigger') pendingCmds.push({ effect: cmd.effect, force: !!cmd.force || !!manual });
 }
 
@@ -117,6 +123,7 @@ function ensureSize(w, h) {
   hiddenC = canvas(W, H); hiddenX = ctx2d(hiddenC);
   masks.resize(W, H);
   plate.resize(W, H);
+  mfx.resize(W, H);
 }
 
 function fxCtx(now, dt) {
@@ -137,11 +144,13 @@ function fxCtx(now, dt) {
     hidden() {
       if (!hiddenDone) {
         hiddenDone = true;
-        const fill = plate.filled();
+        // Room v2: exposure-matched room; once the room is locked the wider
+        // soft influence zone (shadows, bounce light) is replaced as well
+        const fill = plate.exposed();
         hiddenX.globalCompositeOperation = 'copy';
         hiddenX.drawImage(fill, 0, 0);
         hiddenX.globalCompositeOperation = 'destination-in';
-        hiddenX.drawImage(masks.hideSoft, 0, 0, st.W, st.H);
+        hiddenX.drawImage(plate.locked && masks.zoneValid ? masks.zone : masks.hideSoft, 0, 0, st.W, st.H);
         hiddenX.globalCompositeOperation = 'destination-over';
         hiddenX.drawImage(frameC, 0, 0);
         hiddenX.globalCompositeOperation = 'source-over';
@@ -149,7 +158,7 @@ function fxCtx(now, dt) {
       return hiddenC;
     },
   };
-  return { W: st.W, H: st.H, ctx: outX, now, dt, masks, layers, sfx, mic, settings: st.settings, smoke };
+  return { W: st.W, H: st.H, ctx: outX, now, dt, masks, layers, sfx, mic, settings: st.settings, smoke, fx: mfx };
 }
 
 function onFrame(d) {
@@ -168,9 +177,10 @@ function onFrame(d) {
     outX.drawImage(frameC, 0, 0);
     return reply(d.id);
   }
-  if (!vision.ready && !vision.loading && !vision.error) vision.load();
+  if (!st.noAI && !vision.ready && !vision.loading && !vision.error) vision.load();
 
   // ---- AI
+  const t0 = performance.now();
   let hands = [];
   try {
     if (vision.ready) {
@@ -180,7 +190,9 @@ function onFrame(d) {
     } else if (st.fakeSeg) { masks.input(frameC); masks.fakeFromInput(); }
   } catch (err) { console.warn('[Vanish FX] inference error', err); }
   st.hands = hands;
-  if (masks.valid) plate.learn(frameC, masks, now);
+  masks.wantZone = plate.locked;
+  plate.learn(frameC, masks, now, { autoLock: dust.state === 'idle' && scroll.state === 'idle' });
+  const t1 = performance.now();
 
   const X = fxCtx(now, dt);
 
@@ -215,10 +227,51 @@ function onFrame(d) {
   scroll.render(X);
   orb.render(X, palms);
   smoke.render(outX, dt);
+  mfx.render(outX, outC, dt);
+  mfx.post(outX, outC, now, dt);
+  const t2 = performance.now();
+  perf.ai = perf.ai * 0.9 + (t1 - t0) * 0.1;
+  perf.fx = perf.fx * 0.9 + (t2 - t1) * 0.1;
+  logStates(now);
+  grabFrames(now);
   if (st.debug) drawDebug(hands);
-  if (st.debug && plate.coverage < 0.9 && !plate.capturePending(now)) drawHint('Tip: click "Capture empty room" and step out of frame, so vanishing shows your real wall instead of a blur');
-  if (st.debug && plate.capturePending(now)) drawHint(plate.capturing(now) ? 'Capturing the room… stay out of frame' : `Step out of frame… ${Math.ceil((plate.captureStart - now) / 1000)}`);
+  if (st.debug) {
+    const cap = plate.captureInfo(now);
+    if (cap?.phase === 'countdown') drawHint(`Step out of frame… ${cap.secs}`);
+    else if (cap?.phase === 'capturing') drawHint('Capturing your room… stay out of frame');
+    else if (cap?.phase === 'done') drawHint(cap.locked ? `Room ${cap.auto ? 'auto-' : ''}captured ✓ (${cap.pct}%) · come back and snap!` : `Room ${cap.pct}% captured · part of you was still in view, try again`);
+    else if (!plate.locked && plate.coverage < 0.9) drawHint('Tip: click "Capture empty room" and step out of frame, so vanishing shows your real wall instead of a blur');
+  }
   reply(d.id);
+}
+
+// state-transition log (read by the headless tests through __vfxDebug)
+let lastStates = '';
+function logStates(now) {
+  const s = `${dust.state} ${scroll.state} ${clones.state} ${orb.state}`;
+  if (s === lastStates) return;
+  lastStates = s;
+  const tr = (globalThis.__vfxDebug.transitions ||= []);
+  tr.push({ t: Math.round(now), snap: dust.state, scroll: scroll.state, clones: clones.state, orb: orb.state });
+  if (tr.length > 200) tr.shift();
+}
+
+// test hook: tests push { at, name } into __vfxDebug.grabs to get exact-time
+// copies of the rendered output (browser screenshots lag at low frame rates)
+function grabFrames(now) {
+  const g = globalThis.__vfxDebug.grabs;
+  if (!g?.length) return;
+  const tr = globalThis.__vfxDebug.transitions || [];
+  for (const r of g) if (r.at == null && tr.length > r.after) { r.t0 = tr[r.after].t; r.at = r.t0 + r.rel; }
+  for (const req of g.filter((r) => !r.done && r.at != null && now >= r.at)) {
+    req.done = true;
+    req.actual = Math.round(now - req.t0);
+    outC.convertToBlob({ type: 'image/jpeg', quality: 0.9 }).then((b) => {
+      const fr = new FileReader();
+      fr.onload = () => { req.data = fr.result; };
+      fr.readAsDataURL(b);
+    });
+  }
 }
 
 function reply(id) {
@@ -254,13 +307,14 @@ function drawDebug(hands) {
   }
   if (masks.bbox) { c.strokeStyle = 'rgba(255,255,0,0.6)'; const b = masks.bbox; c.strokeRect(b.x, b.y, b.w, b.h); }
   c.fillStyle = 'rgba(0,0,0,0.55)';
-  c.fillRect(8, 8, 330, 92);
+  c.fillRect(8, 8, 360, 112);
   c.fillStyle = '#fff';
   c.font = '14px system-ui, sans-serif';
   const s = status();
   c.fillText(`models: ${vision.ready ? 'ready' : vision.error ? 'ERROR ' + vision.error : 'loading…'}  fps: ${s.fps}`, 16, 28);
   c.fillText(`hands: ${hands.length}  seal: ${gestures.debug.seal ? 'YES' : '-'}  cross: ${gestures.debug.cross ? 'YES' : '-'}`, 16, 48);
-  c.fillText(`room learned: ${s.bgCoverage}%  mic: ${st.micPresent ? (st.micMuted ? 'muted' : 'live') : 'none'}`, 16, 68);
+  c.fillText(`room ${s.roomLocked ? 'locked' : 'learned'}: ${s.bgCoverage}%  mic: ${st.micPresent ? (st.micMuted ? 'muted' : 'live') : 'none'}`, 16, 68);
   c.fillText(`snap:${dust.state} scroll:${scroll.state} clones:${clones.state} orb:${orb.state}`, 16, 88);
+  c.fillText(`ms/frame  ai: ${perf.ai.toFixed(1)}  fx: ${perf.fx.toFixed(1)}`, 16, 108);
   c.restore();
 }
