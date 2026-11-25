@@ -216,12 +216,26 @@ function onFrame(d) {
   orb.render(X, palms);
   smoke.render(outX, dt);
   if (st.debug) drawDebug(hands);
+  if (st.debug && plate.coverage < 0.9 && !plate.capturePending(now)) drawHint('Tip: click "Capture empty room" and step out of frame, so vanishing shows your real wall instead of a blur');
+  if (st.debug && plate.capturePending(now)) drawHint(plate.capturing(now) ? 'Capturing the room… stay out of frame' : `Step out of frame… ${Math.ceil((plate.captureStart - now) / 1000)}`);
   reply(d.id);
 }
 
 function reply(id) {
   const bmp = outC.transferToImageBitmap();
   toPage({ __vfx: 'out', id, bmp }, [bmp]);
+}
+
+function drawHint(text) {
+  const c = outX;
+  c.save();
+  c.font = `600 ${Math.round(st.W / 55)}px system-ui, sans-serif`;
+  const w = c.measureText(text).width + 32, h = st.W / 30;
+  c.fillStyle = 'rgba(139,92,246,0.9)';
+  c.beginPath(); c.roundRect((st.W - w) / 2, st.H - h - 16, w, h, 10); c.fill();
+  c.fillStyle = '#fff'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.fillText(text, st.W / 2, st.H - h / 2 - 16);
+  c.restore();
 }
 
 // ----------------------------------------------------- local debug overlay

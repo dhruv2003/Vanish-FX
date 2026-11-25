@@ -73,6 +73,27 @@ export class Vision {
 }
 
 // --------------------------------------------------------------------- masks
+// in-place separable max filter (binary dilation) with radius r
+function dilate(bin, tmp, sw, sh, r) {
+  for (let y = 0; y < sh; y++) {
+    let run = -1e9;
+    const row = y * sw;
+    for (let x = 0; x < sw; x++) { if (bin[row + x]) run = x; tmp[row + x] = x - run <= r ? 1 : 0; }
+    run = 1e9;
+    for (let x = sw - 1; x >= 0; x--) { if (bin[row + x]) run = x; if (run - x <= r) tmp[row + x] = 1; }
+  }
+  for (let x = 0; x < sw; x++) {
+    let run = -1e9;
+    for (let y = 0; y < sh; y++) { if (tmp[y * sw + x]) run = y; bin[y * sw + x] = y - run <= r ? 1 : 0; }
+    run = 1e9;
+    for (let y = sh - 1; y >= 0; y--) { if (tmp[y * sw + x]) run = y; if (run - y <= r) bin[y * sw + x] = 1; }
+  }
+}
+function paintMask(img, bin) {
+  const d = img.data;
+  for (let i = 0; i < bin.length; i++) { d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = 255; d[i * 4 + 3] = bin[i] ? 255 : 0; }
+}
+
 export class Masks {
   constructor() {
     this.sw = 0; this.sh = 0;
@@ -95,6 +116,9 @@ export class Masks {
     this.hide = canvas(this.sw, this.sh);
     this.hideCtx = ctx2d(this.hide);
     this.hideImg = new ImageData(this.sw, this.sh);
+    this.learn = canvas(this.sw, this.sh);
+    this.learnCtx = ctx2d(this.learn);
+    this.learnImg = new ImageData(this.sw, this.sh);
     this.hideSoft = canvas(this.sw, this.sh);
     this.hideSoftCtx = ctx2d(this.hideSoft);
     this.valid = false;
@@ -157,25 +181,16 @@ export class Masks {
       this.bbox = { x, y, w, h, cx: x + w / 2, cy: y + h / 2 };
     } else this.bbox = null;
 
-    // dilated hide mask (separable max filter)
+    // dilated hide mask (what gets replaced by the room when you vanish)
     const r = Math.max(2, Math.round(sw * 0.035));
-    const tmp = this.tmpB;
-    for (let y = 0; y < sh; y++) {
-      let run = -1e9;
-      const row = y * sw;
-      for (let x = 0; x < sw; x++) { if (bin[row + x]) run = x; tmp[row + x] = x - run <= r ? 1 : 0; }
-      run = 1e9;
-      for (let x = sw - 1; x >= 0; x--) { if (bin[row + x]) run = x; if (run - x <= r) tmp[row + x] = 1; }
-    }
-    const hd = this.hideImg.data;
-    for (let x = 0; x < sw; x++) {
-      let run = -1e9;
-      for (let y = 0; y < sh; y++) { if (tmp[y * sw + x]) run = y; bin[y * sw + x] = y - run <= r ? 1 : 0; }
-      run = 1e9;
-      for (let y = sh - 1; y >= 0; y--) { if (tmp[y * sw + x]) run = y; if (run - y <= r) bin[y * sw + x] = 1; }
-    }
-    for (let i = 0; i < n; i++) { hd[i * 4] = hd[i * 4 + 1] = hd[i * 4 + 2] = 255; hd[i * 4 + 3] = bin[i] ? 255 : 0; }
+    dilate(bin, this.tmpB, sw, sh, r);
+    paintMask(this.hideImg, bin);
     this.hideCtx.putImageData(this.hideImg, 0, 0);
+    // much wider "don't learn here" mask: hair/clothes edges that the model
+    // misses must never leak into the room plate
+    dilate(bin, this.tmpB, sw, sh, Math.round(r * 1.6));
+    paintMask(this.learnImg, bin);
+    this.learnCtx.putImageData(this.learnImg, 0, 0);
     this.hideSoftCtx.clearRect(0, 0, sw, sh);
     this.hideSoftCtx.filter = 'blur(2px)';
     this.hideSoftCtx.drawImage(this.hide, 0, 0);
@@ -184,6 +199,17 @@ export class Masks {
 }
 
 // ---------------------------------------------------- learned background plate
+function makeGrain() {
+  const S = 128, c = canvas(S, S), x = ctx2d(c), img = x.createImageData(S, S);
+  for (let i = 0; i < S * S; i++) {
+    const v = 128 + (Math.random() - 0.5) * 26;
+    img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v;
+    img.data[i * 4 + 3] = 255;
+  }
+  x.putImageData(img, 0, 0);
+  return c;
+}
+
 export class Plate {
   resize(W, H) {
     this.W = W; this.H = H;
@@ -225,10 +251,10 @@ export class Plate {
       // 8-bit premultiplied colours drift (dark rims in the filled room)
       tmpCtx.globalCompositeOperation = 'destination-out';
       tmpCtx.imageSmoothingEnabled = false;
-      tmpCtx.drawImage(masks.hide, 0, 0, W, H);
+      tmpCtx.drawImage(masks.learn, 0, 0, W, H);
       tmpCtx.imageSmoothingEnabled = true;
       tmpCtx.globalCompositeOperation = 'source-over';
-      bgCtx.globalAlpha = 0.1;
+      bgCtx.globalAlpha = masks.bbox ? 0.08 : 0.2; // nobody in frame: learn fast
       bgCtx.drawImage(this.tmp, 0, 0);
       bgCtx.globalAlpha = 1;
     }
@@ -254,7 +280,11 @@ export class Plate {
     }
     const top = levels[levels.length - 1];
     for (let i = 0; i < 6; i++) top.x.drawImage(top.c, 0, 0);
+    // spread known colours into fully-unknown cells (the coarsest level is tiny)
     top.x.globalCompositeOperation = 'destination-over';
+    for (let i = 0; i < Math.max(top.w, top.h); i++) {
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) top.x.drawImage(top.c, dx, dy);
+    }
     top.x.fillStyle = '#6b6560';
     top.x.fillRect(0, 0, top.w, top.h);
     top.x.globalCompositeOperation = 'source-over';
@@ -268,7 +298,16 @@ export class Plate {
     f.globalCompositeOperation = 'copy';
     f.drawImage(levels[0].c, 0, 0, W, H);
     f.globalCompositeOperation = 'source-over';
+    // grain on the guessed (smooth) parts so they don't read as a flat blur
+    f.globalCompositeOperation = 'overlay';
+    f.globalAlpha = 0.5;
+    f.fillStyle = this.grainPattern || (this.grainPattern = f.createPattern(makeGrain(), 'repeat'));
+    f.fillRect(0, 0, W, H);
+    f.globalAlpha = 1;
+    f.globalCompositeOperation = 'source-over';
+    f.filter = 'blur(1.5px)'; // hides the stair-steps where known pixels meet the guess
     f.drawImage(this.bg, 0, 0);
+    f.filter = 'none';
     return this.fill;
   }
 }
